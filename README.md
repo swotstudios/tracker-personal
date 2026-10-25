@@ -4,7 +4,7 @@ Dashboard personale per allenamenti, peso, cibo e obiettivi. Zero dipendenze.
 
 ## Online (Vercel)
 
-1. Importa la repository su Vercel (framework: Other, nessun build command).
+1. Importa la repository su Vercel (framework: Other, nessun build command). Il sito sta in `public/`, la funzione in `api/`.
 2. Nel progetto Vercel → Storage → aggiungi **Upstash Redis** (piano free) e collegalo al progetto: crea da solo `KV_REST_API_URL` e `KV_REST_API_TOKEN`.
 3. Settings → Environment Variables → aggiungi `TRACKER_PASSWORD` con la password che vuoi usare.
 4. Fai un Redeploy. L'app chiede la password al primo accesso e la ricorda su quel dispositivo.

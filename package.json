@@ -4,6 +4,6 @@
   "private": true,
   "description": "Dashboard personale: allenamenti, peso, alimentazione, obiettivi",
   "scripts": {
-    "start": "node server.js"
+    "start": "node dev-server.js"
   }
 }

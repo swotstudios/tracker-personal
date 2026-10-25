@@ -6,9 +6,9 @@ const os = require('os');
 
 const PORT = Number(process.env.PORT) || 4321;
 const HOST = process.env.HOST || '0.0.0.0';
-const ROOT = __dirname;
-const DATA = path.join(ROOT, 'data.json');
-const BACKUPS = path.join(ROOT, 'backups');
+const ROOT = path.join(__dirname, 'public');
+const DATA = path.join(__dirname, 'data.json');
+const BACKUPS = path.join(__dirname, 'backups');
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml' };
 
@@ -52,7 +52,7 @@ http.createServer((req, res) => {
 
   const urlPath = req.url.split('?')[0];
   const file = path.normalize(path.join(ROOT, urlPath === '/' ? 'index.html' : urlPath));
-  if (!file.startsWith(ROOT) || file.startsWith(DATA) || file.startsWith(BACKUPS)) { res.writeHead(403); return res.end(); }
+  if (!file.startsWith(ROOT)) { res.writeHead(403); return res.end(); }
   fs.readFile(file, (err, buf) => {
     if (err) { res.writeHead(404); return res.end('Not found'); }
     res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream' });

@@ -4,7 +4,7 @@
     {
       "name": "tracker",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["server.js"],
+      "runtimeArgs": ["dev-server.js"],
       "port": 4321
     }
   ]
