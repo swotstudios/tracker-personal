@@ -107,7 +107,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden && sav
 
 function setStatus(t, err = false) { const el = $('#saveStatus'); el.textContent = t; el.classList.toggle('err', err); }
 let toastTimer;
-function toast(t) { const el = $('#toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 1800); }
+function toast(t, ms = 1800) { const el = $('#toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), ms); }
 
 /* ---------- Calcoli ---------- */
 const sessionsSorted = () => [...DB.sessions].sort((a, b) => a.date.localeCompare(b.date));
@@ -272,7 +272,7 @@ const ui = {
   view: 'dashboard',
   wDate: today(), wTplId: null, draft: null, dirty: false, editProgram: false,
   fDate: today(), calMonth: today().slice(0, 7), calSel: today(),
-  metric: 'top', wRange: 90,
+  metric: 'top', wRange: 90, dietEdit: false,
 };
 
 function tplForDate(date) {
@@ -535,10 +535,10 @@ function foodPanel(date) {
     ${items.length ? MEALS.filter(m => items.some(f => f.meal === m)).map(m => {
       const list = items.filter(f => f.meal === m), mt = totals(list);
       return `<div class="meal"><div class="meal-head"><span>${m}</span><span class="tnum">${fmt(mt.kcal, 0)} kcal</span></div>
-        ${list.map(f => `<div class="food-item"><div>${esc(f.name)}${f.qty ? ` <span class="faint small">${fmt(f.qty, 0)} g</span>` : ''}
+        ${list.map(f => { const dc = dietCheck(f.name); return `<div class="food-item"><div>${esc(f.name)}${f.qty ? ` <span class="faint small">${fmt(f.qty, 0)} g</span>` : ''}${dc?.status === 'avoid' ? ' <span class="chip bad">da evitare</span>' : dc?.status === 'limit' ? ` <span class="chip warn" title="${esc(dc.note)}">con limite</span>` : ''}
           <div class="macro">P ${fmt(f.p || 0, 0)} · C ${fmt(f.c || 0, 0)} · G ${fmt(f.f || 0, 0)}</div></div>
           <b class="tnum small">${fmt(f.kcal || 0, 0)} kcal</b>
-          <button class="btn sm ghost" data-act="rmFood" data-id="${f.id}" aria-label="Rimuovi">×</button></div>`).join('')}</div>`;
+          <button class="btn sm ghost" data-act="rmFood" data-id="${f.id}" aria-label="Rimuovi">×</button></div>`; }).join('')}</div>`;
     }).join('') : `<div class="empty">Niente registrato per questo giorno.</div>`}
   </div>`;
 }
@@ -553,7 +553,8 @@ function viewFood() {
       <button class="btn icon" data-act="fDay" data-n="1" aria-label="Giorno successivo">›</button>
       ${d !== today() ? `<button class="btn sm ghost" data-act="fToday">Oggi</button>` : ''}
     </div></div>
-  ${foodPanel(d)}`;
+  ${foodPanel(d)}
+  ${DB.diet ? freqCard(d) : ''}`;
 }
 
 /* ---------- Vista: Calendario ---------- */
@@ -712,8 +713,187 @@ function viewGoals() {
   ${archived.length ? `<details class="hist" style="margin-top:20px"><summary>Archiviati (${archived.length})</summary><div class="grid g2" style="margin-top:12px">${archived.map(goalCard).join('')}</div></details>` : ''}`;
 }
 
+/* ---------- Guida dieta ---------- */
+// Confronto per parole, tollerando singolare/plurale (mela/mele, gambero/gamberi)
+const stem = w => w.replace(/[aeiouàèéìòù]$/, '');
+const words = s => norm(s).split(/[^a-zàèéìòù]+/).filter(w => w.length > 2).map(stem);
+const containsAll = (hay, needle) => needle.length > 0 && needle.every(w => hay.includes(w));
+
+// Restituisce la voce più specifica della guida che corrisponde al nome (es. "pasta di mais" batte "mais")
+function dietCheck(name) {
+  const D = DB.diet;
+  if (!D || !name) return null;
+  const q = words(name);
+  let best = null;
+  const consider = (status, label, note) => {
+    const w = words(label);
+    // Meglio una voce tutta contenuta nel nome (più parole = più specifica); altrimenti il nome dentro una voce (più corta = più vicina)
+    const score = containsAll(q, w) ? 100 + w.length : containsAll(w, q) ? 50 - w.length : 0;
+    if (score && (!best || score > best.score)) best = { status, label, note, score };
+  };
+  D.foods.ok.forEach(x => consider('ok', x));
+  D.foods.limit.forEach(x => consider('limit', x.name, x.note));
+  D.foods.avoid.forEach(x => consider('avoid', x));
+  return best;
+}
+
+function parseTarget(t) {
+  const s = String(t || '').trim().toLowerCase();
+  let m;
+  if ((m = s.match(/^(\d+)\s*-\s*(\d+)$/))) return { min: +m[1], max: +m[2] };
+  if ((m = s.match(/^max\s*(\d+)$/))) return { min: null, max: +m[1] };
+  if ((m = s.match(/^>\s*(\d+)$/))) return { min: +m[1] + 1, max: null };
+  if ((m = s.match(/^(?:>=|≥|almeno)\s*(\d+)$/))) return { min: +m[1], max: null };
+  if ((m = s.match(/^(\d+)$/))) return { min: +m[1], max: +m[1] };
+  return { min: null, max: null };
+}
+
+function matchesKeyword(name, kw) {
+  const n = norm(name), k = norm(kw);
+  if (k.includes(' ')) return n.includes(k);
+  return n.split(/[^a-zàèéìòù]+/).some(w => w === k || (w.startsWith(k) && w.length - k.length <= 1));
+}
+
+// Quante volte (pasti distinti) ogni fonte proteica compare nella settimana del giorno indicato
+function freqCounts(date) {
+  const ws = weekStart(date), we = addDays(ws, 6);
+  const items = DB.foods.filter(f => f.date >= ws && f.date <= we);
+  return (DB.diet?.freq || []).map(fr => {
+    const hits = new Set();
+    for (const f of items) if (fr.keywords.some(k => matchesKeyword(f.name, k))) hits.add(f.date + '|' + f.meal);
+    return { ...fr, ...parseTarget(fr.target), n: hits.size };
+  });
+}
+
+function freqCard(date) {
+  const rows = freqCounts(date);
+  if (!rows.length) return '';
+  const ws = weekStart(date);
+  return `
+  <div class="card">
+    <div class="card-head"><h3>Fonti proteiche della settimana</h3><span class="faint small">${fmtDate(ws)} – ${fmtDate(addDays(ws, 6))}</span></div>
+    <div class="grid g3" style="gap:14px 22px">
+      ${rows.map(r => {
+        const cap = r.max ?? r.min ?? 1;
+        const over = r.max != null && r.n > r.max, ok = !over && r.min != null && r.n >= r.min;
+        return `<div class="meter"><div class="top"><span>${esc(r.label)}</span>
+            <b>${r.n} <span class="faint">/ ${esc(r.target)}</span>${over ? ' ⚠' : ok ? ' ✓' : ''}</b></div>
+          <div class="bar ${over ? 'over' : ok ? 'good' : ''}"><i style="width:${clamp01(r.n / cap) * 100}%"></i></div>
+          ${r.portion ? `<div class="faint small" style="margin-top:3px">Porzione: ${esc(r.portion)}</div>` : ''}</div>`;
+      }).join('')}
+    </div>
+    <p class="faint small" style="margin:12px 0 0">Calcolato da quello che registri in Cibo, riconoscendo le parole chiave (pollo, salmone, ceci…).</p>
+  </div>`;
+}
+
+function dietResultHtml(q) {
+  if (!q.trim()) return '';
+  const r = dietCheck(q);
+  if (!r) return `<div class="chip" style="margin-top:10px">Non è nella guida: chiedi alla nutrizionista o usa il buon senso</div>`;
+  const map = { ok: ['good', '✓ Consentito'], limit: ['warn', '⚠ Con limite'], avoid: ['bad', '✕ Da evitare'] };
+  const [cls, label] = map[r.status];
+  return `<div class="row" style="margin-top:10px"><span class="chip ${cls}">${label}</span><span><b>${esc(r.label)}</b>${r.note ? ` · ${esc(r.note)}` : ''}</span></div>`;
+}
+
+const emptyDiet = () => ({ title: 'Piano alimentare', meals: [], rules: [], foods: { ok: [], limit: [], avoid: [] }, freq: [], todo: [] });
+
+function viewDiet() {
+  const D = DB.diet;
+  if (!D) return `
+    <div class="page-head"><h2>Guida dieta</h2></div>
+    <div class="card"><div class="empty">
+      Nessuna guida caricata.<br><br>
+      <label class="btn primary">Importa guida (.json)<input type="file" accept=".json,application/json" data-bind="dietImport" hidden></label>
+      <button class="btn" data-act="dietCreate">Crea da zero</button>
+    </div></div>`;
+  if (ui.dietEdit) return viewDietEdit(D);
+  const chips = (list, cls) => list.map(x => `<span class="chip ${cls}">${esc(x.name ?? x)}${x.note ? ` <span style="opacity:.75">· ${esc(x.note)}</span>` : ''}</span>`).join(' ');
+  return `
+  <div class="page-head"><div><h2>Guida dieta</h2>${D.title ? `<div class="muted small">${esc(D.title)}</div>` : ''}</div>
+    <button class="btn ghost" data-act="dietEdit">✏️ Modifica</button></div>
+
+  <div class="card">
+    <h3>Posso mangiarlo?</h3>
+    <input data-bind="dietSearch" placeholder="Scrivi un alimento (es. pesche, zucchine, pasta di mais)" style="width:100%;margin-top:10px" autocomplete="off">
+    <div id="dietResult"></div>
+  </div>
+
+  ${freqCard(today())}
+
+  <div class="grid g3" style="margin-top:14px">
+    <div class="card"><h3 style="margin-bottom:10px">✓ Consentiti</h3><div class="row" style="gap:6px">${chips(D.foods.ok, 'good') || '<span class="faint small">—</span>'}</div></div>
+    <div class="card"><h3 style="margin-bottom:10px">⚠ Con limite</h3><div class="row" style="gap:6px">${chips(D.foods.limit, 'warn') || '<span class="faint small">—</span>'}</div></div>
+    <div class="card"><h3 style="margin-bottom:10px">✕ Da evitare</h3><div class="row" style="gap:6px">${chips(D.foods.avoid, 'bad') || '<span class="faint small">—</span>'}</div></div>
+  </div>
+
+  ${D.meals.length ? `<div class="card" style="margin-top:14px"><h3 style="margin-bottom:4px">Schema dei pasti</h3>
+    ${D.meals.map(m => `<div class="list-row" style="align-items:flex-start"><b style="min-width:110px">${esc(m.title)}</b><div class="muted" style="white-space:pre-line">${esc(m.text)}</div></div>`).join('')}</div>` : ''}
+
+  ${D.rules.length ? `<div class="card"><h3 style="margin-bottom:6px">Indicazioni</h3>
+    <ul style="margin:0;padding-left:18px" class="muted">${D.rules.map(r => `<li style="margin:5px 0">${esc(r)}</li>`).join('')}</ul></div>` : ''}
+
+  ${D.todo.length ? `<div class="card"><h3 style="margin-bottom:6px">Da chiarire con la nutrizionista</h3>
+    <ul style="margin:0;padding-left:18px" class="muted">${D.todo.map(r => `<li style="margin:5px 0">${esc(r)}</li>`).join('')}</ul></div>` : ''}`;
+}
+
+function viewDietEdit(D) {
+  const ta = (name, value, rows = 6) => `<textarea name="${name}" rows="${rows}">${esc(value)}</textarea>`;
+  return `
+  <div class="page-head"><h2>Modifica guida</h2></div>
+  <form data-form="diet" class="stack">
+    <div class="card"><label class="field">Titolo<input name="title" value="${esc(D.title || '')}"></label></div>
+    <div class="card"><h3>Schema dei pasti</h3><p class="faint small">Un pasto per blocco: prima riga <b>NOME:</b>, poi il testo. Separa i pasti con una riga vuota.</p>
+      ${ta('meals', D.meals.map(m => `${m.title}:\n${m.text}`).join('\n\n'), 14)}</div>
+    <div class="grid g3">
+      <div class="card"><h3>Consentiti</h3><p class="faint small">Uno per riga.</p>${ta('ok', D.foods.ok.join('\n'), 12)}</div>
+      <div class="card"><h3>Con limite</h3><p class="faint small">Uno per riga: <b>alimento | nota</b></p>${ta('limit', D.foods.limit.map(x => `${x.name} | ${x.note || ''}`).join('\n'), 12)}</div>
+      <div class="card"><h3>Da evitare</h3><p class="faint small">Uno per riga.</p>${ta('avoid', D.foods.avoid.join('\n'), 12)}</div>
+    </div>
+    <div class="card"><h3>Frequenze settimanali</h3><p class="faint small">Una per riga: <b>nome | volte (es. 3-4, max 1, 2, >2) | porzione | parole chiave separate da virgola</b></p>
+      ${ta('freq', D.freq.map(f => `${f.label} | ${f.target} | ${f.portion || ''} | ${f.keywords.join(', ')}`).join('\n'), 8)}</div>
+    <div class="card"><h3>Indicazioni</h3><p class="faint small">Una per riga.</p>${ta('rules', D.rules.join('\n'), 8)}</div>
+    <div class="card"><h3>Da chiarire</h3><p class="faint small">Una per riga.</p>${ta('todo', D.todo.join('\n'), 4)}</div>
+    <div class="row"><button class="btn primary">Salva guida</button><button type="button" class="btn ghost" data-act="dietEdit">Annulla</button>
+      <span class="spacer"></span><button type="button" class="btn ghost danger" data-act="dietDelete">Elimina guida</button></div>
+  </form>`;
+}
+
+function parseDietForm(fd) {
+  const lines = s => String(s || '').split('\n').map(x => x.trim()).filter(Boolean);
+  const meals = String(fd.meals || '').split(/\n\s*\n/).map(b => b.trim()).filter(Boolean).map(b => {
+    const [first, ...rest] = b.split('\n');
+    return { title: first.replace(/:\s*$/, '').trim(), text: rest.join('\n').trim() };
+  });
+  return {
+    title: String(fd.title || '').trim(),
+    meals,
+    rules: lines(fd.rules),
+    todo: lines(fd.todo),
+    foods: {
+      ok: lines(fd.ok),
+      avoid: lines(fd.avoid),
+      limit: lines(fd.limit).map(l => { const [name, note] = l.split('|').map(x => x.trim()); return { name, note: note || '' }; }),
+    },
+    freq: lines(fd.freq).map(l => {
+      const [label, target, portion, kws] = l.split('|').map(x => (x || '').trim());
+      return { label, target, portion, keywords: (kws || '').split(',').map(x => x.trim()).filter(Boolean) };
+    }),
+  };
+}
+
+async function importDiet(file) {
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    const d = data.diet || data;
+    if (!d.foods || !Array.isArray(d.freq)) throw new Error();
+    DB.diet = Object.assign(emptyDiet(), d);
+    save(); render(); toast('Guida importata');
+  } catch { toast('File non valido'); }
+}
+
 /* ---------- Render ---------- */
-const VIEWS = { dashboard: viewDashboard, allenamento: viewWorkout, alimentazione: viewFood, calendario: viewCalendar, progressi: viewProgress, obiettivi: viewGoals };
+const VIEWS = { dashboard: viewDashboard, allenamento: viewWorkout, alimentazione: viewFood, calendario: viewCalendar, progressi: viewProgress, obiettivi: viewGoals, dieta: viewDiet };
 
 function render() {
   pendingCharts = [];
@@ -804,6 +984,9 @@ const actions = {
   goalArchive: el => { const g = DB.goals.find(x => x.id === el.dataset.id); g.archived = !g.archived; save(); render(); },
   goalDel: el => { if (!confirm('Eliminare questo obiettivo?')) return; DB.goals = DB.goals.filter(x => x.id !== el.dataset.id); save(); render(); },
 
+  dietEdit: () => { ui.dietEdit = !ui.dietEdit; render(); window.scrollTo(0, 0); },
+  dietCreate: () => { DB.diet = emptyDiet(); ui.dietEdit = true; save(); render(); },
+  dietDelete: () => { if (!confirm('Eliminare la guida dieta?')) return; DB.diet = null; ui.dietEdit = false; save(); render(); },
   logout: () => { try { localStorage.removeItem(PW_KEY); } catch { /* storage non disponibile */ } location.reload(); },
   export: () => {
     const blob = new Blob([JSON.stringify(DB, null, 2)], { type: 'application/json' });
@@ -817,7 +1000,10 @@ function addFood(date, f) {
   const k = norm(f.name), prev = DB.foodLib[k];
   DB.foodLib[k] = { name: f.name, qty: f.qty, kcal: f.kcal, p: f.p, c: f.c, f: f.f, count: (prev?.count || 0) + 1 };
   save(); render();
-  toast(`${f.name} aggiunto`);
+  const dc = dietCheck(f.name);
+  if (dc?.status === 'avoid') toast(`⚠ ${f.name} aggiunto, ma la guida dice di evitarlo`, 3500);
+  else if (dc?.status === 'limit') toast(`${f.name} aggiunto · ${dc.note || 'con limite'}`, 3500);
+  else toast(`${f.name} aggiunto`);
 }
 
 document.addEventListener('click', e => {
@@ -861,6 +1047,11 @@ document.addEventListener('submit', e => {
       DB.goals.unshift(g); save(); render(); toast('Obiettivo aggiunto 🎯');
       break;
     }
+    case 'diet': {
+      DB.diet = parseDietForm(fd);
+      ui.dietEdit = false; save(); render(); window.scrollTo(0, 0); toast('Guida salvata');
+      break;
+    }
     case 'goalVal': {
       const g = DB.goals.find(x => x.id === form.dataset.id), v = num(fd.v);
       if (v == null) return;
@@ -881,6 +1072,7 @@ document.addEventListener('input', e => {
   else if (b === 'dayNote') { if (el.value.trim()) DB.notes[el.dataset.date] = el.value; else delete DB.notes[el.dataset.date]; save(); }
   else if (b === 'setting') { const v = num(el.value); if (v != null) { DB.settings[el.dataset.k] = v; save(); } }
   else if (b === 'pName') { DB.program[el.dataset.di].name = el.value; save(); }
+  else if (b === 'dietSearch') $('#dietResult').innerHTML = dietResultHtml(el.value);
   else if (el.name === 'name' && el.form?.dataset.form === 'food') autofillFood(el.form);
   else if (el.name === 'qty' && el.form?.dataset.form === 'food') scaleFood(el.form);
 });
@@ -893,6 +1085,7 @@ document.addEventListener('change', e => {
   else if (b === 'pEx') { const x = DB.program[el.dataset.di].exercises[el.dataset.xi]; x[el.dataset.f] = el.dataset.f === 'sets' ? Math.max(1, Number(el.value) || 1) : el.value.trim(); save(); }
   else if (b === 'goalType') el.form.dataset.type = el.value;
   else if (b === 'import') importFile(el.files[0]);
+  else if (b === 'dietImport') importDiet(el.files[0]);
 });
 
 const fld = (form, k) => form.querySelector(`[name="${k}"]`);

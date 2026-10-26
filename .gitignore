@@ -5,3 +5,4 @@ node_modules/
 .vercel
 .env*
 .DS_Store
+dieta-guida.json
