@@ -1,10 +1,9 @@
 // Funzione Vercel: legge e salva i dati del tracker su Upstash Redis (via REST, senza dipendenze)
-const crypto = require('crypto');
+const { PASSWORD, authorized } = require('./_auth');
 
 const KEY = 'tracker:data';
 const REDIS_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
 const REDIS_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
-const PASSWORD = process.env.TRACKER_PASSWORD;
 
 async function redis(command) {
   const r = await fetch(REDIS_URL, {
@@ -15,12 +14,6 @@ async function redis(command) {
   const out = await r.json();
   if (!r.ok || out.error) throw new Error(out.error || `Redis ${r.status}`);
   return out.result;
-}
-
-function authorized(req) {
-  const given = Buffer.from(String(req.headers['x-tracker-key'] || ''));
-  const expected = Buffer.from(PASSWORD);
-  return given.length === expected.length && crypto.timingSafeEqual(given, expected);
 }
 
 module.exports = async (req, res) => {

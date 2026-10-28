@@ -1,8 +1,11 @@
-// Server locale senza dipendenze: serve l'app e salva i dati in data.json
+// Server locale: serve l'app e salva i dati in data.json
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+
+// Chiave API facoltativa per "Descrivi il pasto": mettila in .env.local (ANTHROPIC_API_KEY=...)
+try { process.loadEnvFile(path.join(__dirname, '.env.local')); } catch { /* nessun .env.local */ }
 
 const PORT = Number(process.env.PORT) || 4321;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -33,6 +36,17 @@ function writeData(body) {
 }
 
 http.createServer((req, res) => {
+  if (req.url === '/api/parse' && req.method === 'POST') {
+    let body = '';
+    req.on('data', c => { body += c; if (body.length > 1e5) req.destroy(); });
+    req.on('end', async () => {
+      let parsed; try { parsed = JSON.parse(body || '{}'); } catch { parsed = {}; }
+      const [status, out] = await require('./api/parse').handle(parsed);
+      res.writeHead(status, { 'Content-Type': status === 200 ? 'application/json' : 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(status === 200 ? JSON.stringify(out) : out);
+    });
+    return;
+  }
   if (req.url === '/api/data') {
     if (req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });

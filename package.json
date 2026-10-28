@@ -5,5 +5,8 @@
   "description": "Dashboard personale: allenamenti, peso, alimentazione, obiettivi",
   "scripts": {
     "start": "node dev-server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.3.0"
   }
 }

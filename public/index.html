@@ -203,6 +203,26 @@ label.field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; 
 @media (max-width: 860px) { .food-form { grid-template-columns: repeat(4, minmax(0, 1fr)); } .food-form .f-name { grid-column: 1 / -1; } .food-form .f-meal { grid-column: span 2; } .food-form .f-btn { grid-column: span 2; } }
 .food-form input, .food-form select { width: 100%; }
 .food-form .field { font-size: 12px; }
+.ai-form { display: grid; align-items: end; grid-template-columns: minmax(0, 1fr) 190px auto; gap: 6px; }
+.ai-form input, .ai-form select { width: 100%; }
+.ai-form .f-name { color: var(--text); font-weight: 600; }
+@media (max-width: 600px) { .ai-form { grid-template-columns: minmax(0, 1fr) auto; } .ai-form .f-name { grid-column: 1 / -1; } }
+.ai-box { margin-top: 10px; padding: 12px; border-radius: 10px; background: var(--surface-2); }
+.ai-row { display: grid; grid-template-columns: minmax(0, 2.4fr) repeat(5, minmax(0, .8fr)) 32px; gap: 6px; align-items: center; margin-top: 6px; }
+.ai-row.ai-head { margin-top: 0; }
+.ai-row input { width: 100%; padding: 6px 7px; font-size: 13.5px; }
+.ai-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ai-name input { flex: 1; min-width: 0; }
+@media (max-width: 600px) {
+  .ai-row { grid-template-columns: repeat(5, minmax(0, 1fr)) 30px; }
+  .ai-row .ai-name { grid-column: 1 / -1; }
+  .ai-row.ai-head span:first-child { display: none; }
+  .ai-row:not(.ai-head) { padding-top: 8px; border-top: 1px solid var(--border); }
+  .ai-foot { flex-wrap: wrap; justify-content: flex-end; }
+  .ai-foot #aiTot { flex-basis: 100%; }
+}
+.divider-label { display: flex; align-items: center; gap: 10px; margin: 16px 0 10px; font-size: 12px; color: var(--text-3); }
+.divider-label::before, .divider-label::after { content: ""; flex: 1; height: 1px; background: var(--border); }
 .quick { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
 .quick button { border: 1px dashed var(--border); background: transparent; border-radius: 999px; padding: 5px 11px; cursor: pointer; font-size: 13px; color: var(--text-1); }
 .quick button:hover { border-style: solid; background: var(--surface-2); }

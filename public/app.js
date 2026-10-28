@@ -276,7 +276,7 @@ const ui = {
   view: 'dashboard',
   wDate: today(), wTplId: null, draft: null, dirty: false, editProgram: false,
   fDate: today(), calMonth: today().slice(0, 7), calSel: today(),
-  metric: 'top', wRange: 90, dietEdit: false,
+  metric: 'top', wRange: 90, dietEdit: false, ai: null,
 };
 
 function tplForDate(date) {
@@ -519,6 +519,13 @@ function foodPanel(date) {
     </div>
   </div>
   <div class="card">
+    <form class="ai-form" data-form="ai" data-date="${date}" autocomplete="off">
+      <label class="field f-name">✨ Descrivi il pasto<input name="text" maxlength="600" placeholder="Es. yogurt bianco 200 g, 40 g fiocchi di mais, una banana, caffè" value="${ui.ai?.date === date ? esc(ui.ai.text) : ''}" required></label>
+      <label class="field f-meal">Pasto<select name="meal">${MEALS.map(m => `<option ${m === (ui.ai?.date === date ? ui.ai.meal : defaultMeal()) ? 'selected' : ''}>${m}</option>`).join('')}</select></label>
+      <button class="btn primary f-btn" ${ui.ai?.loading ? 'disabled' : ''}>${ui.ai?.loading ? 'Calcolo…' : 'Calcola'}</button>
+    </form>
+    ${aiPreview(date)}
+    <div class="divider-label">oppure inserisci a mano</div>
     <form class="food-form" data-form="food" data-date="${date}" autocomplete="off">
       <label class="field f-name">Alimento<input name="name" list="foodlist" placeholder="Cosa hai mangiato? (es. Petto di pollo)" required></label>
       <label class="field">Grammi<input name="qty" inputmode="decimal" placeholder="g"></label>
@@ -545,6 +552,42 @@ function foodPanel(date) {
           <button class="btn sm ghost" data-act="rmFood" data-id="${f.id}" aria-label="Rimuovi">×</button></div>`; }).join('')}</div>`;
     }).join('') : `<div class="empty">Niente registrato per questo giorno.</div>`}
   </div>`;
+}
+
+// Anteprima modificabile degli alimenti riconosciuti da "Descrivi il pasto"
+function aiPreview(date) {
+  const A = ui.ai;
+  if (!A || A.date !== date) return '';
+  if (A.loading) return `<div class="ai-box faint small">Sto riconoscendo gli alimenti…</div>`;
+  if (A.error) return `<div class="ai-box"><span class="chip bad">Errore</span> <span class="small">${esc(A.error)}</span> <button class="btn sm ghost" data-act="aiCancel">Chiudi</button></div>`;
+  if (!A.items.length) return `<div class="ai-box small muted">Non ho riconosciuto alimenti in questa descrizione. <button class="btn sm ghost" data-act="aiCancel">Chiudi</button></div>`;
+  const tot = totals(A.items), cell = (i, k, v) => `<input data-bind="aiItem" data-i="${i}" data-f="${k}" inputmode="decimal" value="${v ?? ''}" aria-label="${k}">`;
+  return `
+  <div class="ai-box">
+    <div class="ai-row ai-head small faint"><span>Alimento</span><span>g</span><span>kcal</span><span>P</span><span>C</span><span>G</span><span></span></div>
+    ${A.items.map((f, i) => { const dc = dietCheck(f.name); return `<div class="ai-row">
+      <span class="ai-name"><input data-bind="aiItem" data-i="${i}" data-f="name" value="${esc(f.name)}" aria-label="Alimento">${dc?.status === 'avoid' ? '<span class="chip bad">da evitare</span>' : dc?.status === 'limit' ? `<span class="chip warn" title="${esc(dc.note)}">con limite</span>` : ''}${f.qty_stimata ? '<span class="faint small" title="Quantità stimata: correggila se la sai">≈</span>' : ''}</span>
+      ${cell(i, 'qty', f.qty)}${cell(i, 'kcal', f.kcal)}${cell(i, 'p', f.p)}${cell(i, 'c', f.c)}${cell(i, 'f', f.f)}
+      <button class="btn sm ghost" data-act="aiRm" data-i="${i}" aria-label="Rimuovi">×</button></div>`; }).join('')}
+    <div class="row ai-foot" style="margin-top:10px">
+      <span class="small muted spacer" id="aiTot">Totale ${fmt(tot.kcal, 0)} kcal · P ${fmt(tot.p, 0)} · C ${fmt(tot.c, 0)} · G ${fmt(tot.f, 0)} <span class="faint">(stime)</span></span>
+      <button class="btn ghost sm" data-act="aiCancel">Annulla</button>
+      <button class="btn primary sm" data-act="aiAdd">Aggiungi a ${esc(A.meal)}</button>
+    </div>
+  </div>`;
+}
+
+async function parseMealText(date, text, meal) {
+  ui.ai = { date, text, meal, loading: true, items: [] };
+  render();
+  try {
+    const r = await fetch('/api/parse', { method: 'POST', headers: apiHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ text }) });
+    if (!r.ok) throw new Error(r.status === 404 || r.status === 405 ? 'Funzione non disponibile in questa versione' : await r.text());
+    const out = await r.json();
+    ui.ai.items = out.items.map(f => ({ ...f, base: { ...f } }));
+  } catch (e) { ui.ai.error = e.message || 'Errore di rete'; }
+  ui.ai.loading = false;
+  render();
 }
 
 function viewFood() {
@@ -1012,6 +1055,16 @@ const actions = {
     const meal = el.closest('main').querySelector('form[data-form="food"] select[name="meal"]')?.value || defaultMeal();
     addFood(el.dataset.date, { name: f.name, qty: f.qty, kcal: f.kcal, p: f.p, c: f.c, f: f.f, meal });
   },
+  aiCancel: () => { ui.ai = null; render(); },
+  aiRm: el => { ui.ai.items.splice(Number(el.dataset.i), 1); render(); },
+  aiAdd: () => {
+    const { date, meal, items } = ui.ai;
+    const list = items.filter(f => f.name.trim());
+    for (const f of list) recordFood(date, { name: f.name.trim(), qty: f.qty, kcal: f.kcal, p: f.p, c: f.c, f: f.f, meal });
+    ui.ai = null; save(); render();
+    const avoid = list.filter(f => dietCheck(f.name)?.status === 'avoid').map(f => f.name);
+    toast(avoid.length ? `⚠ Aggiunti ${list.length} alimenti, ma la guida dice di evitare: ${avoid.join(', ')}` : `Aggiunti ${list.length} alimenti a ${meal}`, avoid.length ? 4000 : 2000);
+  },
   rmFood: el => { DB.foods = DB.foods.filter(f => f.id !== el.dataset.id); save(); render(); },
   copyFoods: el => {
     const date = el.dataset.date, prev = foodsOn(addDays(date, -1));
@@ -1041,10 +1094,14 @@ const actions = {
   },
 };
 
-function addFood(date, f) {
+function recordFood(date, f) {
   DB.foods.push({ id: uid(), date, ...f });
   const k = norm(f.name), prev = DB.foodLib[k];
   DB.foodLib[k] = { name: f.name, qty: f.qty, kcal: f.kcal, p: f.p, c: f.c, f: f.f, count: (prev?.count || 0) + 1 };
+}
+
+function addFood(date, f) {
+  recordFood(date, f);
   save(); render();
   const dc = dietCheck(f.name);
   if (dc?.status === 'avoid') toast(`⚠ ${f.name} aggiunto, ma la guida dice di evitarlo`, 3500);
@@ -1063,6 +1120,11 @@ document.addEventListener('submit', e => {
   const form = e.target, fd = Object.fromEntries(new FormData(form));
   e.preventDefault();
   switch (form.dataset.form) {
+    case 'ai': {
+      const text = fd.text.trim();
+      if (text && !ui.ai?.loading) parseMealText(form.dataset.date, text, fd.meal);
+      break;
+    }
     case 'gut': {
       const types = new FormData(form).getAll('type');
       if (!types.length && !fd.note.trim()) return toast('Scegli almeno un disturbo');
@@ -1125,6 +1187,7 @@ document.addEventListener('input', e => {
   else if (b === 'dayNote') { if (el.value.trim()) DB.notes[el.dataset.date] = el.value; else delete DB.notes[el.dataset.date]; save(); }
   else if (b === 'setting') { const v = num(el.value); if (v != null) { DB.settings[el.dataset.k] = v; save(); } }
   else if (b === 'pName') { DB.program[el.dataset.di].name = el.value; save(); }
+  else if (b === 'aiItem') aiEdit(el);
   else if (b === 'dietSearch') $('#dietResult').innerHTML = dietResultHtml(el.value);
   else if (el.name === 'name' && el.form?.dataset.form === 'food') autofillFood(el.form);
   else if (el.name === 'qty' && el.form?.dataset.form === 'food') scaleFood(el.form);
@@ -1140,6 +1203,24 @@ document.addEventListener('change', e => {
   else if (b === 'import') importFile(el.files[0]);
   else if (b === 'dietImport') importDiet(el.files[0]);
 });
+
+// Modifica di un campo nell'anteprima: cambiando i grammi le macro si ricalcolano in proporzione
+function aiEdit(el) {
+  const it = ui.ai.items[el.dataset.i], k = el.dataset.f;
+  if (k === 'name') { it.name = el.value; return; }
+  const v = num(el.value);
+  if (k === 'qty' && v != null && it.base.qty) {
+    const r = v / it.base.qty;
+    for (const m of ['kcal', 'p', 'c', 'f']) {
+      it[m] = Math.round(it.base[m] * r * (m === 'kcal' ? 1 : 10)) / (m === 'kcal' ? 1 : 10);
+      const inp = el.closest('.ai-row').querySelector(`[data-f="${m}"]`); if (inp) inp.value = it[m];
+    }
+  }
+  it[k] = v;
+  if (k !== 'qty') it.base = { ...it, base: undefined };
+  const tot = totals(ui.ai.items), t = $('#aiTot');
+  if (t) t.innerHTML = `Totale ${fmt(tot.kcal, 0)} kcal · P ${fmt(tot.p, 0)} · C ${fmt(tot.c, 0)} · G ${fmt(tot.f, 0)} <span class="faint">(stime)</span>`;
+}
 
 const fld = (form, k) => form.querySelector(`[name="${k}"]`);
 
