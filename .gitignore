@@ -6,3 +6,4 @@ node_modules/
 .env*
 .DS_Store
 dieta-guida.json
+recap-idea-saas.md

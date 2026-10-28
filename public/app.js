@@ -19,7 +19,11 @@ const clamp01 = x => Math.max(0, Math.min(1, x));
 
 const DOW = ['Domenica', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'];
 const DOW_SHORT = ['Dom', 'Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab'];
-const MEALS = ['Colazione', 'Pranzo', 'Spuntino', 'Cena'];
+const MEALS = ['Colazione', 'Spuntino mattina', 'Pranzo', 'Spuntino pomeriggio', 'Pre-allenamento', 'Post-allenamento', 'Cena', 'Spuntino sera'];
+// Ordine di visualizzazione: include i pasti dei dati vecchi (es. "Spuntino") e quelli sconosciuti in coda
+const mealOrder = items => { const extra = [...new Set(items.map(f => f.meal))].filter(m => !MEALS.includes(m)); return [...MEALS.slice(0, 2), ...extra.filter(m => m === 'Spuntino'), ...MEALS.slice(2), ...extra.filter(m => m !== 'Spuntino')]; };
+const GUT_TYPES = ['Gonfiore', 'Aria', 'Dolore / crampi', 'Diarrea', 'Stitichezza', 'Nausea', 'Reflusso', 'Altro'];
+const GUT_LEVELS = ['', 'Lieve', 'Moderato', 'Forte'];
 const UNITS = ['kg', 'kg/manubrio', 'kg assistenza'];
 const isAssist = unit => /assist/i.test(unit || '');
 
@@ -33,7 +37,7 @@ const defaultProgram = () => [
   { id: uid(), weekday: 6, name: 'UPPER B', exercises: [mkEx('Trazioni', 'kg assistenza', 3), mkEx('Pulley basso', 'kg', 3), mkEx('Shoulder press', 'kg', 3), mkEx('Pectoral machine', 'kg', 3), mkEx('Curl bicipiti', 'kg/manubrio', 3), mkEx('Alzate laterali', 'kg/manubrio', 2)] },
 ];
 const defaultDB = () => ({
-  version: 1, program: defaultProgram(), sessions: [], weights: [], foods: [], foodLib: {}, goals: [], notes: {},
+  version: 1, program: defaultProgram(), sessions: [], weights: [], foods: [], foodLib: {}, goals: [], notes: {}, gut: [],
   settings: { kcal: 2200, protein: 150, carbs: 250, fat: 70 },
 });
 
@@ -179,7 +183,7 @@ const foodsOn = date => DB.foods.filter(f => f.date === date);
 function totals(items) {
   return items.reduce((t, f) => ({ kcal: t.kcal + (f.kcal || 0), p: t.p + (f.p || 0), c: t.c + (f.c || 0), f: t.f + (f.f || 0) }), { kcal: 0, p: 0, c: 0, f: 0 });
 }
-const defaultMeal = () => { const h = new Date().getHours(); return h < 11 ? 'Colazione' : h < 15 ? 'Pranzo' : h < 18 ? 'Spuntino' : 'Cena'; };
+const defaultMeal = () => { const d = new Date(), h = d.getHours() + d.getMinutes() / 60; return h < 10.5 ? 'Colazione' : h < 12 ? 'Spuntino mattina' : h < 15 ? 'Pranzo' : h < 19 ? 'Spuntino pomeriggio' : h < 22 ? 'Cena' : 'Spuntino sera'; };
 
 function weekStart(date) { const d = parseISO(date); const off = (d.getDay() + 6) % 7; d.setDate(d.getDate() - off); return iso(d); }
 
@@ -532,7 +536,7 @@ function foodPanel(date) {
   <div class="card">
     <div class="card-head"><h3>Pasti</h3>
       <button class="btn sm ghost" data-act="copyFoods" data-date="${date}">↺ Copia da giorno prima</button></div>
-    ${items.length ? MEALS.filter(m => items.some(f => f.meal === m)).map(m => {
+    ${items.length ? mealOrder(items).filter(m => items.some(f => f.meal === m)).map(m => {
       const list = items.filter(f => f.meal === m), mt = totals(list);
       return `<div class="meal"><div class="meal-head"><span>${m}</span><span class="tnum">${fmt(mt.kcal, 0)} kcal</span></div>
         ${list.map(f => { const dc = dietCheck(f.name); return `<div class="food-item"><div>${esc(f.name)}${f.qty ? ` <span class="faint small">${fmt(f.qty, 0)} g</span>` : ''}${dc?.status === 'avoid' ? ' <span class="chip bad">da evitare</span>' : dc?.status === 'limit' ? ` <span class="chip warn" title="${esc(dc.note)}">con limite</span>` : ''}
@@ -555,6 +559,45 @@ function viewFood() {
     </div></div>
   ${foodPanel(d)}
   ${DB.diet ? freqCard(d) : ''}`;
+}
+
+/* ---------- Disturbi intestinali ---------- */
+const gutOn = d => DB.gut.filter(g => g.date === d).sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+const gutLevel = d => Math.max(0, ...gutOn(d).map(g => g.level || 1));
+const gutText = g => `${g.types.length ? g.types.join(', ') : 'Disturbo'} · ${GUT_LEVELS[g.level || 1].toLowerCase()}`;
+
+function gutCard(date) {
+  const list = gutOn(date);
+  return `
+  <div class="card gut-card" style="margin-top:16px">
+    <div class="card-head"><h3>🚨 Disturbi intestinali</h3>
+      <button class="btn sm ghost" data-act="calSel" data-date="${addDays(date, -1)}">← Cibo del giorno prima</button></div>
+    ${list.map(g => `<div class="list-row"><span class="chip ${g.level === 3 ? 'bad' : 'warn'}">${GUT_LEVELS[g.level || 1]}</span>
+      <div class="spacer"><b>${esc(g.types.join(', ') || 'Disturbo')}</b>${g.time ? ` <span class="faint small">ore ${esc(g.time)}</span>` : ''}${g.note ? `<div class="muted small">${esc(g.note)}</div>` : ''}</div>
+      <button class="btn sm ghost" data-act="rmGut" data-id="${g.id}" aria-label="Rimuovi">×</button></div>`).join('')}
+    <form data-form="gut" data-date="${date}" class="stack" style="margin-top:${list.length ? 12 : 6}px">
+      <div class="gut-types">${GUT_TYPES.map(t => `<label class="gut-type"><input type="checkbox" name="type" value="${esc(t)}"><span>${esc(t)}</span></label>`).join('')}</div>
+      <div class="row" style="align-items:flex-end">
+        <label class="field">Intensità<select name="level">${[1, 2, 3].map(l => `<option value="${l}" ${l === 2 ? 'selected' : ''}>${GUT_LEVELS[l]}</option>`).join('')}</select></label>
+        <label class="field">Ora<input type="time" name="time"></label>
+        <label class="field spacer">Note<input name="note" placeholder="Es. dopo cena, durato 2 ore…"></label>
+        <button class="btn primary">Aggiungi</button>
+      </div>
+    </form>
+  </div>`;
+}
+
+function gutHistoryCard() {
+  const days = [...new Set(DB.gut.map(g => g.date))].sort().reverse().slice(0, 12);
+  if (!days.length) return '';
+  return `
+  <div class="card" style="margin-top:16px">
+    <div class="card-head"><h3>Giorni con disturbi</h3><span class="faint small">${new Set(DB.gut.map(g => g.date)).size} in totale</span></div>
+    ${days.map(d => `<button class="list-row gut-day" data-act="calSel" data-date="${d}">
+      <span>🚨</span><b style="min-width:92px">${cap(fmtDate(d, { weekday: 'short', day: 'numeric', month: 'short' }))}</b>
+      <span class="spacer muted small">${esc(gutOn(d).map(gutText).join(' — '))}</span>
+      <span class="faint small">${foodsOn(d).length} cibi</span></button>`).join('')}
+  </div>`;
 }
 
 /* ---------- Vista: Calendario ---------- */
@@ -585,9 +628,9 @@ function viewCalendar() {
     <div class="cal">
       ${['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'].map(x => `<div class="dow">${x}</div>`).join('')}
       ${cells.map(d => {
-        const ss = DB.sessions.filter(s => s.date === d), kc = totals(foodsOn(d)).kcal, wk = DB.weights.find(x => x.date === d);
-        return `<button class="cal-cell ${d.slice(0, 7) !== ui.calMonth ? 'out' : ''} ${d === t ? 'today' : ''} ${d === sel ? 'sel' : ''}" data-act="calSel" data-date="${d}">
-          <span class="d">${parseISO(d).getDate()}</span>
+        const ss = DB.sessions.filter(s => s.date === d), kc = totals(foodsOn(d)).kcal, wk = DB.weights.find(x => x.date === d), gl = gutLevel(d);
+        return `<button class="cal-cell ${d.slice(0, 7) !== ui.calMonth ? 'out' : ''} ${d === t ? 'today' : ''} ${d === sel ? 'sel' : ''} ${gl ? 'gut gut' + gl : ''}" data-act="calSel" data-date="${d}">
+          <span class="d">${parseISO(d).getDate()}</span>${gl ? `<span class="gut-flag" title="Disturbi intestinali">🚨</span>` : ''}
           ${ss.map(s => `<span class="w">${esc(s.name)}</span>`).join('')}
           ${kc ? `<span class="k">🍽 ${fmt(kc, 0)}</span>` : ''}
           ${wk ? `<span class="k">⚖️ ${fmt(wk.kg)}</span>` : ''}
@@ -595,6 +638,7 @@ function viewCalendar() {
       }).join('')}
     </div>
   </div>
+  ${gutHistoryCard()}
 
   <div class="page-head" style="margin-top:24px"><h2>${cap(fmtDate(sel, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))}</h2></div>
   <div class="grid g2">
@@ -617,6 +661,7 @@ function viewCalendar() {
       <textarea data-bind="dayNote" data-date="${sel}" placeholder="Note del giorno (sonno, energia, umore…)">${esc(DB.notes[sel] || '')}</textarea>
     </div>
   </div>
+  ${gutCard(sel)}
   <h3 style="margin:22px 0 10px">Cibo</h3>
   ${foodPanel(sel)}`;
 }
@@ -978,6 +1023,7 @@ const actions = {
   calMonth: el => { const [y, m] = ui.calMonth.split('-').map(Number); const d = new Date(y, m - 1 + Number(el.dataset.n), 1); ui.calMonth = iso(d).slice(0, 7); render(); },
   calToday: () => { ui.calMonth = today().slice(0, 7); ui.calSel = today(); render(); },
   calSel: el => { ui.calSel = el.dataset.date; if (ui.calSel.slice(0, 7) !== ui.calMonth) ui.calMonth = ui.calSel.slice(0, 7); render(); },
+  rmGut: el => { DB.gut = DB.gut.filter(g => g.id !== el.dataset.id); save(); render(); },
   rmWeight: el => { DB.weights = DB.weights.filter(w => w.date !== el.dataset.date); save(); render(); },
 
   goalDone: el => { const g = DB.goals.find(x => x.id === el.dataset.id); g.done = !g.done; g.achievedAt = g.done ? today() : undefined; save(); render(); },
@@ -1017,6 +1063,13 @@ document.addEventListener('submit', e => {
   const form = e.target, fd = Object.fromEntries(new FormData(form));
   e.preventDefault();
   switch (form.dataset.form) {
+    case 'gut': {
+      const types = new FormData(form).getAll('type');
+      if (!types.length && !fd.note.trim()) return toast('Scegli almeno un disturbo');
+      DB.gut.push({ id: uid(), date: form.dataset.date, time: fd.time || '', types, level: Number(fd.level) || 1, note: fd.note.trim() });
+      save(); render(); toast('Disturbo registrato');
+      break;
+    }
     case 'weight': {
       const kg = num(fd.kg); if (kg == null) return;
       DB.weights = DB.weights.filter(w => w.date !== fd.date);
